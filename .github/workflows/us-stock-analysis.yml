@@ -105,6 +105,7 @@ jobs:
           # ── 리포트 설정 ────────────────────────────────
           REPORT_LANGUAGE: en
           # LLM 프롬프트를 통해 한국어 강제 적용 (아래 별도 설명)
+          MARKET_REVIEW_REGION: "us" 
           MARKET_REVIEW_ENABLED: "true"
 
           # ── 실행 설정 ──────────────────────────────────
@@ -121,7 +122,7 @@ jobs:
           echo "🚀 분석 시작: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "📋 종목: $STOCK_LIST"
           echo "🤖 모델: $OPENAI_MODEL"
-          python main.py --market-review --force-run
+          python main.py --force-run
           echo "✅ 분석 완료"
 
       # ──────────────────────────────────────
