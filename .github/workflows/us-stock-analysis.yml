@@ -1,0 +1,135 @@
+# .github/workflows/us-market-analysis.yml
+name: 🇺🇸 미국 시장 일일 분석
+
+on:
+  # ──────────────────────────────────────────
+  # 스케줄: 미국 동부 여름(EDT) 기준 9:00 AM = UTC 13:00 = KST 22:00
+  # 미국 장 개시(9:30 AM EDT) 30분 전
+  # ──────────────────────────────────────────
+  schedule:
+    # UTC 13:00 = KST 22:00 (EDT 여름 시즌: 3월~11월)
+    - cron: '0 13 * * 2-6'
+    # UTC 14:00 = KST 23:00 (EST 겨울 시즌: 11월~3월) → 필요 시 활성화
+    # - cron: '0 14 * * 2-6'
+
+  # 수동 실행 (테스트용)
+  workflow_dispatch:
+    inputs:
+      stocks:
+        description: '분석할 종목 (쉼표 구분, 비워두면 기본 목록 사용)'
+        required: false
+        default: ''
+      force_run:
+        description: '거래일 체크 무시하고 강제 실행'
+        required: false
+        default: 'false'
+        type: boolean
+
+# 동시 실행 방지
+concurrency:
+  group: us-stock-analysis
+  cancel-in-progress: false
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '45') }}
+
+    steps:
+      # ──────────────────────────────────────
+      # 1. 랜덤 딜레이 (서버 부하 분산)
+      # ──────────────────────────────────────
+      - name: ⏱️ 랜덤 시작 딜레이
+        run: sleep $((RANDOM % 30))
+
+      # ──────────────────────────────────────
+      # 2. 코드 체크아웃
+      # ──────────────────────────────────────
+      - name: 📥 코드 체크아웃
+        uses: actions/checkout@v4
+
+      # ──────────────────────────────────────
+      # 3. Python 환경 설정
+      # ──────────────────────────────────────
+      - name: 🐍 Python 3.11 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ──────────────────────────────────────
+      # 4. 의존성 설치
+      # ──────────────────────────────────────
+      - name: 📦 패키지 설치
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ──────────────────────────────────────
+      # 5. 필수 디렉토리 생성
+      # ──────────────────────────────────────
+      - name: 📁 디렉토리 생성
+        run: mkdir -p data logs reports
+
+      # ──────────────────────────────────────
+      # 6. 분석 실행
+      # ──────────────────────────────────────
+      - name: 📊 미국 시장 분석 실행
+        env:
+          # ── LLM: NVIDIA NIM (OpenAI 호환) ──────────────
+          OPENAI_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL || 'https://integrate.api.nvidia.com/v1' }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'deepseek-ai/deepseek-r1' }}
+
+          # 채널 명시적 지정 (NVIDIA NIM을 PRIMARY로 설정)
+          LLM_PRIMARY_PROTOCOL: openai
+          LLM_PRIMARY_BASE_URL: https://integrate.api.nvidia.com/v1
+          LLM_PRIMARY_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          LLM_PRIMARY_MODELS: deepseek-ai/deepseek-r1
+          LLM_PRIMARY_ENABLED: "true"
+
+          # ── 뉴스 검색 ──────────────────────────────────
+          TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEY }}
+          SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEY }}
+          BRAVE_API_KEYS: ${{ secrets.BRAVE_API_KEY }}
+          SEARXNG_BASE_URLS: ${{ secrets.SEARXNG_BASE_URLS }}
+          SEARXNG_PUBLIC_INSTANCES_ENABLED: "true"
+
+          # ── Discord 알림 ───────────────────────────────
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+          # ── 종목 설정 ──────────────────────────────────
+          # 수동 실행 시 입력값 우선, 없으면 Variable 기본값
+          STOCK_LIST: ${{ github.event.inputs.stocks || vars.STOCK_LIST || 'AAPL,NVDA,MSFT,AMZN,GOOGL' }}
+
+          # ── 리포트 설정 ────────────────────────────────
+          REPORT_LANGUAGE: en
+          # LLM 프롬프트를 통해 한국어 강제 적용 (아래 별도 설명)
+          MARKET_REVIEW_ENABLED: "true"
+
+          # ── 실행 설정 ──────────────────────────────────
+          RUN_IMMEDIATELY: "true"
+          SCHEDULE_ENABLED: "false"
+          MAX_WORKERS: "2"
+          DEBUG: "false"
+          WEBUI_ENABLED: "false"
+
+          # ── 거래일 체크 무시 (수동 실행 시) ────────────
+          FORCE_RUN: ${{ github.event.inputs.force_run || 'false' }}
+
+        run: |
+          echo "🚀 분석 시작: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "📋 종목: $STOCK_LIST"
+          echo "🤖 모델: $OPENAI_MODEL"
+          python main.py --market-review
+          echo "✅ 분석 완료"
+
+      # ──────────────────────────────────────
+      # 7. 실패 시 Discord 알림
+      # ──────────────────────────────────────
+      - name: ❌ 실패 알림 (Discord)
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+               -d "{\"content\": \"⚠️ **미국 시장 분석 실패** ⚠️\n실행 시간: $(date '+%Y-%m-%d %H:%M KST')\n[로그 확인](<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}>)\"}" \
+               "${{ secrets.DISCORD_WEBHOOK_URL }}"
